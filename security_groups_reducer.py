@@ -12,6 +12,9 @@ Features:
 2- (if possible) analyze floating security groups and return their IDs to delete them by ID
     2.1- using the information in the following link: https://aws.amazon.com/premiumsupport/knowledge-center/ec2-find-security-group-resources/ I can get what is
         using my security group and can delete it or get some details of what is using it.
+
+Findings:
+1- when searching by instance ID the security groups returned are just the security groups attached to the primary interface.
 '''
 def parse_command_line_arguments():
     args_parser = argparse.ArgumentParser(description='Process script arguments')
@@ -20,7 +23,6 @@ def parse_command_line_arguments():
     args_parser.add_argument('-p', '--profile', help='The AWS named profile you wish to use with this script')
     args_parser.add_argument('-d', '--detail', help='The Details of each security group with Inbound and Outbound rules')
     return args_parser.parse_args()
-
 
 def configure_boto3_session(profile_name=''):
     if profile_name:
@@ -33,6 +35,10 @@ def is_all_traffic_allowed(permission_entry):
 def get_protocol(permission_entry):
     return permission_entry['IpProtocol']
 
+def get_security_groups_ids(ec2_resource, network_interface_id):
+    network_interface = ec2_resource.NetworkInterface(network_interface_id)
+    return [sg['GroupId'] for sg in network_interface.groups]
+
 def process_permission_entry(permission_entry):
     if is_all_traffic_allowed(permission_entry):
             print('All Traffic Allowed From Cidr Range: {0}'.format(permission_entry['IpRanges']))
@@ -43,39 +49,27 @@ def process_permission_entry(permission_entry):
             ports = '{0}-{1}'.format(permission_entry['FromPort'], permission_entry['ToPort'])
         print('Protocol: {0}, Ports:{1}, Cidr Ranges:{2}'.format(permission_entry['IpProtocol'], ports, permission_entry['IpRanges']))
 
-global_start = time()
-args = parse_command_line_arguments()
+def run():
+    args = parse_command_line_arguments()
 
-network_interface_id = args.network_interface_id
-region = args.region
-profile = args.profile
+    boto3_session = configure_boto3_session(args.profile)
+    ec2_resource = boto3_session.resource('ec2', region_name=args.region)
 
-boto3_session = configure_boto3_session(profile)
+    security_groups_list = []
+    for security_group_id in get_security_groups_ids(ec2_resource, args.network_interface_id):
+        security_groups_list.append(ec2_resource.SecurityGroup(security_group_id))
 
-ec2_resource = boto3_session.resource('ec2', region_name=region)
-network_interface = ec2_resource.NetworkInterface(network_interface_id)
-
-
-security_groups_list = []
-for security_group in network_interface.groups:
-    security_groups_list.append(ec2_resource.SecurityGroup(security_group['GroupId']))
-
-# print(security_groups_list)
-# print(security_groups_list[0].ip_permissions_egress)
-
-print('Security Analysis')
-for security_group in security_groups_list:
-    print('-------{0}---------\n-------{1}---------'.format(security_group.group_name, 'Inbound Rules'))
-    for permission_entry in security_group.ip_permissions:
-        process_permission_entry(permission_entry)
-    print('-------{0}---------'.format('Outbound Rules'))
-    for permission_entry in security_group.ip_permissions_egress:
-        process_permission_entry(permission_entry)
-
-global_end = time()
-print('Security Groups Analyzed in {0} seconds'.format(global_end - global_start))
-
+    print('Security Groups Analysis')
+    for security_group in security_groups_list:
+        print('-------{0}---------\n-------{1}---------'.format(security_group.group_name, 'Inbound Rules'))
+        for permission_entry in security_group.ip_permissions:
+            process_permission_entry(permission_entry)
+        print('-------{0}---------'.format('Outbound Rules'))
+        for permission_entry in security_group.ip_permissions_egress:
+            process_permission_entry(permission_entry)
 
 if __name__ == '__main__':
-    print("Testing Script")
-    parse_command_line_arguments()
+    start_time = time()
+    run()
+    end_time = time()
+    print('Security Groups Analyzed in {0} seconds'.format(end_time - start_time))
